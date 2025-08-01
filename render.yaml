@@ -1,0 +1,10 @@
+services:
+  - type: web
+    name: my-fastapi-app
+    env: docker
+    plan: free
+    region: oregon
+    dockerfilePath: ./Dockerfile
+    envVars:
+      - key: PORT
+        value: 10000
