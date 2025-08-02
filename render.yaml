@@ -1,10 +1,7 @@
 services:
   - type: web
-    name: my-fastapi-app
+    name: web-chatbot-batdongsan
     env: docker
     plan: free
     region: oregon
     dockerfilePath: ./Dockerfile
-    envVars:
-      - key: PORT
-        value: 10000
