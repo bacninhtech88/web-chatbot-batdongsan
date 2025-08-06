@@ -50,7 +50,7 @@ def send_email(subject: str, content: str):
     try:
         resend.Emails.send({
             "from": "bot@bacninhtech.com",
-            "to": "dongbds88@gmail.com",
+            "to": "contact@bacninhtech.com",
             "subject": subject,
             "html": f"<p>{content}</p>",
         })
