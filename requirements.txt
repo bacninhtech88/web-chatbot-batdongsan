@@ -19,3 +19,5 @@ docx2txt==0.9
 pypdf
 resend
 requests
+
+gspread
