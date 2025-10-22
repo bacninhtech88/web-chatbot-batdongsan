@@ -38,7 +38,7 @@ load_dotenv()
 os.environ["CHROMA_TELEMETRY"] = "false"
 
 # ==== Cấu hình API ====
-CREDENTIALS_URL = "https://foreignervietnam.com/langchain/drive-folder.php"
+CREDENTIALS_URL = "https://bacninhtech.com/aiapp/drive-folder.php"
 CREDENTIALS_TOKEN = os.getenv("CREDENTIALS_TOKEN")
 SERVICE_ACCOUNT_FILE = "/tmp/drive-folder.json"
 FOLDER_ID = "1rXRIAvC4wb63WjrAaj0UUiidpL2AiZzQ"
