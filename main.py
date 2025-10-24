@@ -38,13 +38,12 @@ load_dotenv()
 os.environ["CHROMA_TELEMETRY"] = "false"
 
 # ==== Cấu hình API ====
-CREDENTIALS_URL = "https://bacninhtech.com/aiapp/drive-folder.php"
-CREDENTIALS_TOKEN = os.getenv("CREDENTIALS_TOKEN")
+GCP_CREDENTIALS_JSON= os.getenv("GCP_CREDENTIALS_JSON")
 SERVICE_ACCOUNT_FILE = "/tmp/drive-folder.json"
-FOLDER_ID = "1rXRIAvC4wb63WjrAaj0UUiidpL2AiZzQ"
+FOLDER_ID = os.getenv("FOLDER_ID_DRIVE")
 
 # ==== Gửi email ====
-resend.api_key = "re_DwokJ9W5_E7evBxTVZ2kVVGLPEd9puRuC"
+resend.api_key = os.getenv("MAIL_RESEND_API")
 
 def send_email(subject: str, content: str):
     try:
@@ -58,13 +57,22 @@ def send_email(subject: str, content: str):
         print("Lỗi gửi mail:", e)
 
 # ==== Tải file credentials từ API ====
-headers = {"X-Access-Token": CREDENTIALS_TOKEN}
-response = requests.get(CREDENTIALS_URL, headers=headers)
-if response.status_code == 200:
-    with open(SERVICE_ACCOUNT_FILE, "wb") as f:
-        f.write(response.content)
-else:
-    raise Exception(f"Không thể tải file credentials: {response.status_code}")
+print("Bắt đầu: Khởi tạo file xác thực từ biến môi trường...")
+if not GCP_CREDENTIALS_JSON:
+    raise Exception("LỖI FATAL: Không tìm thấy biến môi trường GCP_CREDENTIALS_JSON.")
+    
+try:
+    # Ghi nội dung JSON vào file tạm /tmp/drive-folder.json (mode 'w' cho string)
+    with open(SERVICE_ACCOUNT_FILE, "w") as f:
+        f.write(GCP_CREDENTIALS_JSON)
+    
+    # KHI FILE ĐƯỢC GHI THÀNH CÔNG, KHÔNG CẦN BƯỚC XỬ LÝ LỖI KHÁC NỮA
+    print("Hoàn tất: Tạo file xác thực tạm thời thành công.")
+
+except Exception as e:
+    # Nếu lỗi ghi file (ví dụ: lỗi I/O)
+    print(f"LỖI FATAL: Không thể ghi nội dung credentials vào file tạm: {e}")
+    raise e
 
 # ==== Google Drive functions ====
 def authenticate_drive():
