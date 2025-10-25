@@ -38,7 +38,7 @@ load_dotenv()
 os.environ["CHROMA_TELEMETRY"] = "false"
 
 # ==== Cấu hình API ====
-GCP_CREDENTIALS_JSON= os.getenv("GCP_CREDENTIALS_JSON")
+GCP_CREDENTIALS_JSON= os.getenv("JSON_CONTENT_CREDENTIALS")
 SERVICE_ACCOUNT_FILE = "/tmp/drive-folder.json"
 FOLDER_ID = os.getenv("FOLDER_ID_DRIVE")
 
