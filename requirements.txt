@@ -1,23 +1,28 @@
+# --- Web Framework & API Server ---
 fastapi==0.111.1
-pydantic==2.6.4
 uvicorn==0.30.0
+pydantic==2.6.4
+python-multipart
 
+# --- AI & LangChain Ecosystem ---
 langchain
 langchain-openai
 langchain-community
+langchain-text-splitters
+openai
+tiktoken
+
+# --- Vector Database (Lưu trữ dữ liệu) ---
 chromadb==0.4.22
 
-openai
-google-api-python-client
-google-auth
-google-auth-oauthlib
-
-python-dotenv
-python-docx
-PyPDF2
-docx2txt==0.9
-pypdf
-resend
+# --- Web Scraping (Lấy dữ liệu từ Web) ---
+beautifulsoup4
 requests
 
-gspread
+# --- Data Ingestion & File Processing (Xử lý file cục bộ) ---
+python-dotenv
+python-docx
+pypdf
+
+# --- Utilities ---
+resend
