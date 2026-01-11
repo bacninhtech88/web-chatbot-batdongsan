@@ -1,22 +1,16 @@
 import os
-import io
-import shutil
 import requests
 import resend
 import re
-import smtplib
-from email.message import EmailMessage
-
 from dotenv import load_dotenv
-from google.oauth2 import service_account
-from googleapiclient.discovery import build
-from googleapiclient.http import MediaIoBaseDownload
+from bs4 import BeautifulSoup
 
-from langchain_community.document_loaders import PyPDFLoader, TextLoader, Docx2txtLoader
 from langchain_openai import OpenAIEmbeddings, ChatOpenAI
 from langchain_community.vectorstores import Chroma
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain.chains import RetrievalQA
+from langchain_community.document_loaders import WebBaseLoader
+from langchain_core.prompts import ChatPromptTemplate
 
 from pydantic import BaseModel
 from fastapi import FastAPI
@@ -27,7 +21,7 @@ app = FastAPI()
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Cho phép tất cả các domain gọi API
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -36,13 +30,9 @@ app.add_middleware(
 # ==== Load biến môi trường ====
 load_dotenv()
 os.environ["CHROMA_TELEMETRY"] = "false"
+os.environ["USER_AGENT"] = "dongktc_bot" # Tránh bị block bởi website
 
-# ==== Cấu hình API ====
-GCP_CREDENTIALS_JSON= os.getenv("JSON_CONTENT_CREDENTIALS")
-SERVICE_ACCOUNT_FILE = "/tmp/drive-folder.json"
-FOLDER_ID = os.getenv("FOLDER_ID_DRIVE")
-
-# ==== Gửi email ====
+# ==== Gửi email (Resend) ====
 resend.api_key = os.getenv("MAIL_RESEND_API")
 
 def send_email(subject: str, content: str):
@@ -56,139 +46,134 @@ def send_email(subject: str, content: str):
     except Exception as e:
         print("Lỗi gửi mail:", e)
 
-# ==== Tải file credentials từ API ====
-print("Bắt đầu: Khởi tạo file xác thực từ biến môi trường...")
-if not GCP_CREDENTIALS_JSON:
-    raise Exception("LỖI FATAL: Không tìm thấy biến môi trường GCP_CREDENTIALS_JSON.")
-    
-try:
-    # Ghi nội dung JSON vào file tạm /tmp/drive-folder.json (mode 'w' cho string)
-    with open(SERVICE_ACCOUNT_FILE, "w") as f:
-        f.write(GCP_CREDENTIALS_JSON)
-    
-    # KHI FILE ĐƯỢC GHI THÀNH CÔNG, KHÔNG CẦN BƯỚC XỬ LÝ LỖI KHÁC NỮA
-    print("Hoàn tất: Tạo file xác thực tạm thời thành công.")
+# ==== Thu thập dữ liệu từ Website ====
+def get_website_docs():
+    print("Bắt đầu quét dữ liệu từ website...")
+    url_danh_muc = "https://bacninhtech.com/bds/"
+    try:
+        response = requests.get(url_danh_muc, timeout=10)
+        response.raise_for_status()
+        soup = BeautifulSoup(response.text, 'html.parser')
+        
+        links = []
+        blacklist = ["/local/", "/tel:", "mailto:"]
+        
+        # Tìm tất cả các link trong thẻ <main>
+        found_elements = soup.select('main a')
+        for a in found_elements:
+            link = a.get('href', '').strip()
+            if link and link != "#":
+                if not link.startswith('http'):
+                    base_url = "https://bacninhtech.com"
+                    if not link.startswith('/'):
+                        link = '/' + link
+                    full_link = base_url + link
+                    links.append(full_link)
+                else:
+                    links.append(link)
 
-except Exception as e:
-    # Nếu lỗi ghi file (ví dụ: lỗi I/O)
-    print(f"LỖI FATAL: Không thể ghi nội dung credentials vào file tạm: {e}")
-    raise e
+        # Lọc link sạch
+        clean_links = list(set([l for l in links if not any(word in l for word in blacklist)]))
+        
+        if not clean_links:
+            print("Không tìm thấy link nào, sử dụng link gốc.")
+            clean_links = [url_danh_muc]
 
-# ==== Google Drive functions ====
-def authenticate_drive():
-    creds = service_account.Credentials.from_service_account_file(SERVICE_ACCOUNT_FILE)
-    return build("drive", "v3", credentials=creds)
+        print(f"Tìm thấy {len(clean_links)} liên kết. Đang tải nội dung...")
+        
+        loader = WebBaseLoader(web_path=clean_links)
+        docs = loader.load()
+        
+        text_splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=100)
+        splits = text_splitter.split_documents(docs)
+        print(f"Hoàn tất xử lý: {len(splits)} đoạn văn bản.")
+        return splits
+    except Exception as e:
+        print(f"Lỗi khi lấy dữ liệu web: {e}")
+        return []
 
-def download_drive_files(drive_service):
-    os.makedirs("/tmp/data", exist_ok=True)
-    results = drive_service.files().list(
-        q=f"'{FOLDER_ID}' in parents and trashed=false",
-        fields="files(id, name)"
-    ).execute()
-    files = results.get("files", [])
-    for file in files:
-        file_path = os.path.join("/tmp/data", file["name"])
-        if os.path.exists(file_path):
-            continue
-        request = drive_service.files().get_media(fileId=file["id"])
-        with io.FileIO(file_path, "wb") as fh:
-            downloader = MediaIoBaseDownload(fh, request)
-            done = False
-            while not done:
-                _, done = downloader.next_chunk()
-
-# ==== Tải và xử lý tài liệu ====
-def load_documents():
-    docs = []
-    for filename in os.listdir("/tmp/data"):
-        filepath = os.path.join("/tmp/data", filename)
-        if os.path.getsize(filepath) == 0:
-            continue
-        if filename.endswith(".pdf"):
-            docs.extend(PyPDFLoader(filepath).load())
-        elif filename.endswith(".txt"):
-            docs.extend(TextLoader(filepath).load())
-        elif filename.endswith(".docx"):
-            docs.extend(Docx2txtLoader(filepath).load())
-    return docs
-
-# ==== Tạo Vectorstore từ tài liệu ====
-drive_service = authenticate_drive()
-download_drive_files(drive_service)
-documents = load_documents()
-
-text_splitter = RecursiveCharacterTextSplitter(chunk_size=300, chunk_overlap=50)
-splits = text_splitter.split_documents(documents)
+# ==== Khởi tạo Vector Store & QA Chain ====
+print("Đang khởi tạo hệ thống RAG...")
+all_splits = get_website_docs()
 
 embedding = OpenAIEmbeddings()
+# Sử dụng Chroma (Lưu tạm trong /tmp để tương thích với Hugging Face/Serverless)
 vectorstore = Chroma.from_documents(
-    documents=splits,
+    documents=all_splits,
     embedding=embedding,
-    persist_directory="/tmp/chroma_db"
+    persist_directory="/tmp/chroma_db_web"
 )
 
-# ==== Khởi tạo mô hình trả lời ====
-llm = ChatOpenAI(model="gpt-3.5-turbo", temperature=0.7)
+llm = ChatOpenAI(model="gpt-3.5-turbo", temperature=0) # Temp=0 để trả lời chính xác thông tin web
+
+# Custom Prompt để Bot trả lời chuyên nghiệp hơn
+template = """Bạn là một chuyên gia bất động sản và tư vấn tại Bac Ninh Tech. 
+Hãy sử dụng thông tin sau để trả lời câu hỏi của khách hàng.
+Nếu thông tin không có trong tài liệu, hãy nói là bạn chưa có thông tin chính xác về vấn đề này và đề nghị khách để lại số điện thoại.
+Tối đa 3 câu, viết ngắn gọn, chuyên nghiệp.
+
+Thông tin hỗ trợ: {context}
+Câu hỏi: {question}
+Trả lời:"""
+
+prompt = ChatPromptTemplate.from_template(template)
+
 qa_chain = RetrievalQA.from_chain_type(
     llm=llm,
-    retriever=vectorstore.as_retriever(),
-    chain_type="stuff"
+    retriever=vectorstore.as_retriever(search_kwargs={"k": 4}),
+    chain_type="stuff",
+    chain_type_kwargs={"prompt": prompt}
 )
 
 # ==== Input model ====
 class ChatRequest(BaseModel):
     message: str
 
-# ==== Xử lý logic ====
+# ==== Helper functions ====
 def extract_phone_number(text: str):
-    match = re.search(r"\b(?:0|\+84)[\d\s\-\.]{8,}\b", text)
-    if match:
-        return match.group(0)
-    return None
-
-def extract_keyword(text: str, keyword: str):
-    if keyword.lower() in text.lower():
-        return keyword
-    return None
+    # Regex cải tiến cho số điện thoại VN
+    match = re.search(r"(?:\+84|0)\d{8,10}\b", text.replace(" ", "").replace(".", ""))
+    return match.group(0) if match else None
 
 # ==== API trả lời chat ====
 @app.post("/chat")
 async def chat_endpoint(req: ChatRequest):
     try:
-        response_part = [qa_chain.run(req.message)]
+        # 1. Lấy câu trả lời từ RAG Website
+        # Lưu ý: RetrievalQA dùng .run() hoặc .invoke()
+        bot_answer = qa_chain.run(req.message)
 
+        # 2. Xử lý logic thu thập thông tin khách hàng
         phone = extract_phone_number(req.message)
-        gia = extract_keyword(req.message, "giá")
-        chinhsach = extract_keyword(req.message, "chính sách")
-        tuvan = extract_keyword(req.message, "tư vấn")
+        msg_lower = req.message.lower()
+        
+        response_part = [bot_answer]
 
         if phone:
-            send_email("Số điện thoại từ chatbot", f"Khách hàng vừa gửi số: {phone}")
-            response = "Cảm ơn bạn đã gửi số điện thoại, hãy chờ liên hệ của chúng tôi."
-        elif gia:
-            response_part.append("Bạn vui lòng để lại số điện thoại, chúng tôi sẽ báo giá chi tiết?")
+            send_email("Khách hàng cần tư vấn BĐS", f"Số điện thoại khách hàng: {phone}\nNội dung chat: {req.message}")
+            response = "Cảm ơn bạn đã để lại số điện thoại! Chuyên viên của Bac Ninh Tech sẽ gọi lại tư vấn cho bạn ngay trong ít phút tới."
+        elif any(k in msg_lower for k in ["giá", "bao nhiêu", "chi phí"]):
+            response_part.append("Để nhận bảng giá chi tiết và ưu đãi mới nhất, bạn vui lòng để lại số điện thoại nhé?")
             response = "<br><br>".join(response_part)
-        elif chinhsach:
-            response_part.append("Vui lòng để lại số điện thoại, chúng tôi sẽ tư vấn chi tiết chính sách.")
-            response = "<br><br>".join(response_part)
-        elif tuvan:
-            response_part.append("Bạn có thể để lại số điện thoại, chúng tôi sẽ gọi điện và tư vấn.")
+        elif any(k in msg_lower for k in ["tư vấn", "liên hệ", "gặp"]):
+            response_part.append("Bạn có thể để lại số điện thoại để chúng tôi hỗ trợ nhanh nhất không?")
             response = "<br><br>".join(response_part)
         else:
-            response_part.append("Bạn cần thêm thông tin gì nữa không?")
+            # Nếu câu trả lời quá ngắn hoặc không có thông tin, gợi ý thêm
+            if len(bot_answer) < 50:
+                response_part.append("Bạn cần hỏi thêm chi tiết về dự án hay chính sách nào không?")
             response = "<br><br>".join(response_part)
 
-        return {"answer": response}  # ✅ Trả đúng key: answer
+        return {"answer": response}
     except Exception as e:
-        return {"answer": f"Lỗi xử lý: {str(e)}"}
+        print(f"Lỗi chat: {e}")
+        return {"answer": "Xin lỗi, hệ thống đang bận xử lý dữ liệu website. Bạn vui lòng thử lại sau giây lát."}
 
-# ==== Kiểm tra root API ====
 @app.get("/")
 def root():
-    return {"message": "LangChain Chatbot API is running!"}
+    return {"message": "Bac Ninh Tech Web-RAG API is running!"}
 
-# ==== Chạy Uvicorn nếu chạy trực tiếp ====
 if __name__ == "__main__":
     import uvicorn
     port = int(os.environ.get("PORT", 8000))
-    uvicorn.run("main:app", host="0.0.0.0", port=port, reload=True)
+    uvicorn.run(app, host="0.0.0.0", port=port)
